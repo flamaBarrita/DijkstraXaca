@@ -9,24 +9,84 @@ import networkx as nx
 app = Flask(__name__)
 CORS(app)
 
+def dijkstra_personalizado(grafo, inicial, destino):
+    # Inicializar distancias y predecesores
+    distancia = {nodo: float('inf') for nodo in grafo.nodes()}
+    distancia[inicial] = 0
+    lista_predecedores = {nodo: None for nodo in grafo.nodes()}
+    
+    # Lista de nodos no visitados
+    lista_nodos_no_visitados = list(grafo.nodes())
+    
+    while lista_nodos_no_visitados:
+        # Encontrar el nodo con la distancia mínima
+        nodo_actual = min(lista_nodos_no_visitados, key=lambda nodo: distancia[nodo])
+        
+        # Si llegamos al destino, podemos terminar
+        if nodo_actual == destino:
+            break
+            
+        lista_nodos_no_visitados.remove(nodo_actual)
+        
+        # Explorar vecinos
+        for vecino in grafo.neighbors(nodo_actual):
+            if vecino not in lista_nodos_no_visitados:
+                continue
+                
+            # Obtener el peso de la arista
+            edge_data = grafo.get_edge_data(nodo_actual, vecino)
+            if not edge_data:
+                continue
+                
+            # Tomar el primer edge (puede haber múltiples entre los mismos nodos)
+            first_key = list(edge_data.keys())[0]
+            costo = edge_data[first_key].get('pesos_tiempo_viaje', float('inf'))
+            
+            # Calcular nueva distancia
+            distancia_nueva = distancia[nodo_actual] + costo
+            
+            # Actualizar si encontramos un camino más corto
+            if distancia_nueva < distancia[vecino]:
+                distancia[vecino] = distancia_nueva
+                lista_predecedores[vecino] = nodo_actual
+    
+    # Reconstruir la ruta
+    ruta = []
+    nodo_actual = destino
+    
+    while nodo_actual is not None:
+        ruta.insert(0, nodo_actual)
+        nodo_actual = lista_predecedores[nodo_actual]
+        
+        # Si no hay camino, retornar None
+        if nodo_actual == inicial and inicial not in ruta:
+            ruta.insert(0, nodo_actual)
+            break
+    
+    # Verificar que la ruta es válida
+    if not ruta or ruta[0] != inicial:
+        return None
+        
+    return ruta
+
 @app.route('/ruta', methods=['POST'])
 def calcular_ruta():
     try:
         data_user = request.get_json()
-        #con la data recibida del usuario, extraemos las coordenadas
+        # Con la data recibida del usuario, extraemos las coordenadas
         coords_origen = (data_user['origen']['lat'], data_user['origen']['lng'])
         coords_destino = (data_user['destino']['lat'], data_user['destino']['lng'])
         print(f"Coordenadas recibidas - Origen: {coords_origen}, Destino: {coords_destino}")
         
         # Cargar red vial de Oaxaca
         punto_inicial = (17.026351452600192, -96.73258533277694)
-        #tomamos un punto medio entre las localidades para mejorar la carga del grafo
+        # Tomamos un punto medio entre las localidades para mejorar la carga del grafo
         parques_oax = ox.features.features_from_point(punto_inicial, tags={'leisure': 'park'}, dist=15000)
-        #añadimos los parques al mapa para darle una mejor perspectiva visual y de ubicación
+        # Añadimos los parques al mapa para darle una mejor perspectiva visual y de ubicación
         parques_oax_gdf = gpd.GeoDataFrame(parques_oax)
-        #bajamos el grafo de la red vial
+        # Bajamos el grafo de la red vial
         G = ox.graph_from_point(punto_inicial, dist=15000, network_type='drive')
-        #añadimos velocidades a las aristas
+        # Añadimos velocidades a las aristas
         G = ox.routing.add_edge_speeds(G)
 
         # Asignar peso personalizado
@@ -46,7 +106,7 @@ def calcular_ruta():
             d['pesos_tiempo_viaje'] = distancia / velocidad_ms
 
         # Buscar nodos más cercanos
-        #asiganamos las coordenadas recibidas a variables individuales (latitud y longitud)
+        # Asignamos las coordenadas recibidas a variables individuales (latitud y longitud)
         coords_origen_lat, coords_origen_lon = coords_origen
         coords_destino_lat, coords_destino_lon = coords_destino
         try:
@@ -54,24 +114,35 @@ def calcular_ruta():
             coords_destino_nodo = ox.distance.nearest_nodes(G, X=coords_destino_lon, Y=coords_destino_lat)
         except Exception:
             return jsonify({
-                #agragamos un mensaje si las coordenadas están fuera del área de cobertura
+                # Agregamos un mensaje si las coordenadas están fuera del área de cobertura
                 'error': 'Coordenadas fuera del área de cobertura del mapa. Por favor selecciona puntos cercanos a Oaxaca.'
             }), 400
 
-        # Calcular ruta
+        # Calcular ruta usando Dijkstra personalizado
         try:
-            ruta = ox.shortest_path(G, coords_origen_nodo, coords_destino_nodo, weight='pesos_tiempo_viaje')
+            ruta = dijkstra_personalizado(G, coords_origen_nodo, coords_destino_nodo)
             if ruta is None:
                 raise ValueError("No se encontró una ruta válida")
-        except (nx.NetworkXNoPath, ValueError):
+        except Exception as e:
+            print(f"Error en Dijkstra personalizado: {e}")
             return jsonify({
                 'error': 'No se encontró una ruta entre los puntos seleccionados. Revisa si hay calles conectadas entre ambos lugares.'
             }), 404
 
-        # zip hace el manejo de tuplas para recorrer los nodos de la ruta y busca la distancia y el tiempo total
-        distancia_total = sum(G.edges[u, v, 0].get('length', 0) for u, v in zip(ruta[:-1], ruta[1:]))
-        tiempo_total = sum(G.edges[u, v, 0].get('pesos_tiempo_viaje', 0) for u, v in zip(ruta[:-1], ruta[1:]))
-         #creamos un resumen de la ruta usando un diccionario
+        # Calcular distancia y tiempo total
+        distancia_total = 0
+        tiempo_total = 0
+        
+        for i in range(len(ruta) - 1):
+            u = ruta[i]
+            v = ruta[i + 1]
+            edge_data = G.get_edge_data(u, v)
+            if edge_data:
+                first_key = list(edge_data.keys())[0]
+                distancia_total += edge_data[first_key].get('length', 0)
+                tiempo_total += edge_data[first_key].get('pesos_tiempo_viaje', 0)
+
+        # Crear un resumen de la ruta usando un diccionario
         resumen = {
             "distancia_total_m": round(distancia_total, 2),
             "tiempo_total_min": round(tiempo_total / 60, 2)
@@ -89,7 +160,7 @@ def calcular_ruta():
             show=False,
             close=False
         )
-        #agregamos color de los parques al mapa
+        # Agregar color de los parques al mapa
         parques_oax_gdf.plot(ax=ax, color='green', alpha=0.5)
 
         x = [G.nodes[n]['x'] for n in ruta]
@@ -100,7 +171,6 @@ def calcular_ruta():
         ax.axis('off')
         ax.set_aspect('equal', 'box')
 
-
         # Convertir figura a Base64 para que se pueda enviar en JSON
         buf = io.BytesIO()
         plt.tight_layout(pad=0.5)
@@ -110,7 +180,7 @@ def calcular_ruta():
         plt.close(fig)
 
         return jsonify({
-            'mensaje': 'Ruta calculada correctamente',
+            'mensaje': 'Ruta calculada correctamente con Dijkstra personalizado',
             'resumen': resumen,
             'mapa': f"data:image/png;base64,{img_base64}"
         })
