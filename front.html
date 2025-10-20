@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>ROAX - Planea tu Ruta Inteligente</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>
+    body {
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      background-color: #f4f6f7;
+      color: #333;
+    }
+
+    header {
+      background: linear-gradient(90deg, #0a74da, #0984e3, #00a8ff);
+      color: #fff;
+      text-align: center;
+      padding: 20px 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+
+    #modo {
+      text-align: center;
+      margin: 20px;
+    }
+
+    #coordenadas {
+      background-color: white;
+      width: 85%;
+      margin: 15px auto;
+      border-radius: 8px;
+      padding: 15px;
+      display: flex;
+      justify-content: space-around;
+      flex-wrap: wrap;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    .input-group {
+      margin: 10px;
+      text-align: center;
+    }
+
+    .input-group input {
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      width: 180px;
+      text-align: center;
+    }
+
+    #resumen {
+      text-align: center;
+      background-color: #fff;
+      margin: 20px auto;
+      width: 80%;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      padding: 15px;
+      display: none;
+    }
+
+    #map {
+      height: 60vh;
+      width: 90%;
+      margin: 15px auto;
+      border-radius: 10px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+
+    #controls {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    button {
+      padding: 12px 24px;
+      background-color: #0984e3;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 1em;
+      cursor: pointer;
+      transition: background-color 0.3s;
+    }
+
+    button:hover { background-color: #0b7dda; }
+
+    #mapa-generado {
+      display: block;
+      margin: 20px auto;
+      width: 50%;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>ROAX</h1>
+  <p>Selecciona tu método de entrada para calcular la mejor ruta entre las redes viales de <br>Oaxaca de Juárez, Xoxocotlán y San Raymundo Jalpan.</p>
+</header>
+
+<div id="modo">
+  <label><input type="radio" name="modo" value="mapa" checked> Usar el mapa</label>
+  <label style="margin-left:20px;"><input type="radio" name="modo" value="manual"> Ingresar coordenadas manualmente</label>
+</div>
+
+<div id="coordenadas">
+  <div class="input-group">
+    <label>Latitud Origen</label>
+    <input type="number" id="latOrigen" step="0.000001" disabled>
+  </div>
+  <div class="input-group">
+    <label>Longitud Origen</label>
+    <input type="number" id="lngOrigen" step="0.000001" disabled>
+  </div>
+  <div class="input-group">
+    <label>Latitud Destino</label>
+    <input type="number" id="latDestino" step="0.000001" disabled>
+  </div>
+  <div class="input-group">
+    <label>Longitud Destino</label>
+    <input type="number" id="lngDestino" step="0.000001" disabled>
+  </div>
+</div>
+
+<div id="resumen">
+  <h3>Resumen del recorrido</h3>
+  <p id="distancia"></p>
+  <p id="tiempo"></p>
+</div>
+
+<div id="map"></div>
+
+<div id="controls">
+  <button onclick="enviarCoordenadas()">Calcular Ruta</button>
+</div>
+
+<script>
+  var map = L.map('map').setView([17.026, -96.732], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  var puntos = [];
+
+  map.on('click', function(e) {
+    if (!mapActivado) return; 
+    if (puntos.length < 2) {
+      var marker = L.marker(e.latlng).addTo(map);
+      puntos.push(e.latlng);
+    } else {
+      alert("Ya seleccionaste origen y destino. Reinicia si deseas cambiar.");
+    }
+  });
+
+  // Alternar modo
+  var mapActivado = true;
+  document.querySelectorAll('input[name="modo"]').forEach(radio => {
+    radio.addEventListener('change', function() {
+      if (this.value === 'mapa') {
+        mapActivado = true;
+        document.querySelectorAll('#coordenadas input').forEach(i => i.disabled = true);
+        puntos = [];
+        map.eachLayer(l => { if (l instanceof L.Marker) map.removeLayer(l); });
+      } else {
+        mapActivado = false;
+        document.querySelectorAll('#coordenadas input').forEach(i => i.disabled = false);
+        puntos = [];
+        map.eachLayer(l => { if (l instanceof L.Marker) map.removeLayer(l); });
+      }
+    });
+  });
+
+  function enviarCoordenadas() {
+    let origen, destino;
+    if (mapActivado) {
+      if (puntos.length < 2) return alert('Selecciona origen y destino en el mapa.');
+      origen = puntos[0];
+      destino = puntos[1];
+    } else {
+      origen = {
+        lat: parseFloat(document.getElementById('latOrigen').value),
+        lng: parseFloat(document.getElementById('lngOrigen').value)
+      };
+      destino = {
+        lat: parseFloat(document.getElementById('latDestino').value),
+        lng: parseFloat(document.getElementById('lngDestino').value)
+      };
+      if (isNaN(origen.lat) || isNaN(origen.lng) || isNaN(destino.lat) || isNaN(destino.lng))
+        return alert('Debes ingresar todas las coordenadas manualmente.');
+    }
+
+    fetch('http://127.0.0.1:5000/ruta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origen: origen, destino: destino })
+    })
+    .then(res => res.json())
+    .then(data => {
+      console.log('Respuesta recibida:', data);
+
+      // Mostrar resumen
+      const resumen = document.getElementById('resumen');
+      resumen.style.display = 'block';
+      document.getElementById('distancia').innerText = "Distancia total: " + data.resumen.distancia_total_m + " metros";
+      document.getElementById('tiempo').innerText = "Tiempo estimado: " + data.resumen.tiempo_total_min + " minutos";
+
+      // Mostrar mapa reducido
+      const anterior = document.getElementById('mapa-generado');
+      if (anterior) anterior.remove();
+      const img = document.createElement('img');
+      img.src = data.mapa;
+      img.id = 'mapa-generado';
+      document.body.insertBefore(img, document.getElementById('controls'));
+    })
+    .catch(err => {
+      console.error('Error:', err);
+      alert('Error al obtener los datos desde el servidor.');
+    });
+  }
+</script>
+
+</body>
+</html>
