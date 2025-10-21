@@ -63,6 +63,49 @@
       display: none;
     }
 
+    #tabla-segmentos {
+      background-color: #fff;
+      margin: 20px auto;
+      width: 90%;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+      padding: 15px;
+      display: none;
+      overflow-x: auto;
+    }
+
+    #tabla-segmentos table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+
+    #tabla-segmentos th,
+    #tabla-segmentos td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: center;
+    }
+
+    #tabla-segmentos th {
+      background-color: #0984e3;
+      color: white;
+      font-weight: bold;
+    }
+
+    #tabla-segmentos tr:nth-child(even) {
+      background-color: #f8f9fa;
+    }
+
+    #tabla-segmentos tr:hover {
+      background-color: #e9ecef;
+    }
+
+    .coordenada-cell {
+      font-size: 0.85em;
+      color: #666;
+    }
+
     #map {
       height: 60vh;
       width: 90%;
@@ -95,6 +138,28 @@
       width: 50%;
       border-radius: 8px;
       box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    }
+
+    .resumen-stats {
+      display: flex;
+      justify-content: space-around;
+      margin: 15px 0;
+    }
+
+    .stat-item {
+      text-align: center;
+      padding: 10px;
+    }
+
+    .stat-value {
+      font-size: 1.5em;
+      font-weight: bold;
+      color: #0984e3;
+    }
+
+    .stat-label {
+      font-size: 0.9em;
+      color: #666;
     }
   </style>
 </head>
@@ -131,8 +196,36 @@
 
 <div id="resumen">
   <h3>Resumen del recorrido</h3>
-  <p id="distancia"></p>
-  <p id="tiempo"></p>
+  <div class="resumen-stats">
+    <div class="stat-item">
+      <div class="stat-value" id="distancia-total">0 m</div>
+      <div class="stat-label">Distancia Total</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value" id="tiempo-total">0 min</div>
+      <div class="stat-label">Tiempo Total</div>
+    </div>
+    <div class="stat-item">
+      <div class="stat-value" id="segmentos-totales">0</div>
+      <div class="stat-label">Segmentos</div>
+    </div>
+  </div>
+</div>
+
+<div id="tabla-segmentos">
+  <h3>Detalle de Segmentos de la Ruta</h3>
+  <table id="tabla-segmentos-body">
+    <thead>
+      <tr>
+        <th>Segmento</th>
+        <th>Calle</th>
+        <th>Distancia (m)</th>
+        <th>Tiempo (min)</th>
+      </tr>
+    </thead>
+    <tbody>
+    </tbody>
+  </table>
 </div>
 
 <div id="map"></div>
@@ -177,53 +270,92 @@
     });
   });
 
-  function enviarCoordenadas() {
+  function llenarTablaSegmentos(segmentos) {
+    const tbody = document.querySelector('#tabla-segmentos-body tbody');
+    tbody.innerHTML = '';
+
+    console.log('Segmentos recibidos para tabla:', segmentos);
+
+    segmentos.forEach(segmento => {
+        const row = document.createElement('tr');
+        
+        // Usar valores por defecto si algún campo está undefined
+        row.innerHTML = `
+            <td>${segmento.segmento || 'N/A'}</td>
+            <td>${segmento.calle || 'Sin nombre'}</td>
+            <td>${segmento.distancia_metros || 0}</td>
+            <td>${segmento.tiempo_minutos || 0}</td>
+        `;
+        
+        tbody.appendChild(row);
+    });
+
+    // Mostrar la tabla
+    document.getElementById('tabla-segmentos').style.display = 'block';
+}
+
+function enviarCoordenadas() {
     let origen, destino;
     if (mapActivado) {
-      if (puntos.length < 2) return alert('Selecciona origen y destino en el mapa.');
-      origen = puntos[0];
-      destino = puntos[1];
+        if (puntos.length < 2) return alert('Selecciona origen y destino en el mapa.');
+        origen = puntos[0];
+        destino = puntos[1];
     } else {
-      origen = {
-        lat: parseFloat(document.getElementById('latOrigen').value),
-        lng: parseFloat(document.getElementById('lngOrigen').value)
-      };
-      destino = {
-        lat: parseFloat(document.getElementById('latDestino').value),
-        lng: parseFloat(document.getElementById('lngDestino').value)
-      };
-      if (isNaN(origen.lat) || isNaN(origen.lng) || isNaN(destino.lat) || isNaN(destino.lng))
-        return alert('Debes ingresar todas las coordenadas manualmente.');
+        origen = {
+            lat: parseFloat(document.getElementById('latOrigen').value),
+            lng: parseFloat(document.getElementById('lngOrigen').value)
+        };
+        destino = {
+            lat: parseFloat(document.getElementById('latDestino').value),
+            lng: parseFloat(document.getElementById('lngDestino').value)
+        };
+        if (isNaN(origen.lat) || isNaN(origen.lng) || isNaN(destino.lat) || isNaN(destino.lng))
+            return alert('Debes ingresar todas las coordenadas manualmente.');
     }
 
     fetch('http://127.0.0.1:5000/ruta', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ origen: origen, destino: destino })
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ origen: origen, destino: destino })
     })
     .then(res => res.json())
     .then(data => {
-      console.log('Respuesta recibida:', data);
+        console.log('Respuesta completa del servidor:', data);
 
-      // Mostrar resumen
-      const resumen = document.getElementById('resumen');
-      resumen.style.display = 'block';
-      document.getElementById('distancia').innerText = "Distancia total: " + data.resumen.distancia_total_m + " metros";
-      document.getElementById('tiempo').innerText = "Tiempo estimado: " + data.resumen.tiempo_total_min + " minutos";
+        // Mostrar resumen
+        const resumen = document.getElementById('resumen');
+        resumen.style.display = 'block';
+        
+        if (data.resumen) {
+            document.getElementById('distancia-total').innerText = data.resumen.distancia_total_m + " m";
+            document.getElementById('tiempo-total').innerText = data.resumen.tiempo_total_min + " min";
+            document.getElementById('segmentos-totales').innerText = data.resumen.segmentos_totales;
+        }
 
-      // Mostrar mapa reducido
-      const anterior = document.getElementById('mapa-generado');
-      if (anterior) anterior.remove();
-      const img = document.createElement('img');
-      img.src = data.mapa;
-      img.id = 'mapa-generado';
-      document.body.insertBefore(img, document.getElementById('controls'));
+        // Llenar y mostrar tabla de segmentos
+        if (data.segmentos && data.segmentos.length > 0) {
+            console.log('Segmentos para tabla:', data.segmentos);
+            llenarTablaSegmentos(data.segmentos);
+        } else {
+            console.log('No hay segmentos para mostrar');
+            document.getElementById('tabla-segmentos').style.display = 'none';
+        }
+
+        // Mostrar mapa reducido
+        const anterior = document.getElementById('mapa-generado');
+        if (anterior) anterior.remove();
+        if (data.mapa) {
+            const img = document.createElement('img');
+            img.src = data.mapa;
+            img.id = 'mapa-generado';
+            document.body.insertBefore(img, document.getElementById('controls'));
+        }
     })
     .catch(err => {
-      console.error('Error:', err);
-      alert('Error al obtener los datos desde el servidor.');
+        console.error('Error:', err);
+        alert('Error al obtener los datos desde el servidor.');
     });
-  }
+}
 </script>
 
 </body>

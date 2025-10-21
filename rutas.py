@@ -1,197 +1,197 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import osmnx as ox 
-import geopandas as gpd
+import osmnx as osmnx
+import geopandas as geopandas
 import matplotlib.pyplot as plt
 import io, base64
-import networkx as nx
 
+# Crea el objeto Flask para la app web
 app = Flask(__name__)
 CORS(app)
 
-def dijkstra_personalizado(grafo, inicial, destino):
-    # Inicializar distancias y predecesores
-    distancia = {nodo: float('inf') for nodo in grafo.nodes()}
-    distancia[inicial] = 0
-    lista_predecedores = {nodo: None for nodo in grafo.nodes()}
-    
-    # Lista de nodos no visitados
-    lista_nodos_no_visitados = list(grafo.nodes())
-    
-    while lista_nodos_no_visitados:
-        # Encontrar el nodo con la distancia mínima
-        nodo_actual = min(lista_nodos_no_visitados, key=lambda nodo: distancia[nodo])
-        
-        # Si llegamos al destino, podemos terminar
-        if nodo_actual == destino:
+# Algoritmo personalizado de Dijkstra para encontrar la ruta más rápida
+def encontrar_ruta_optima(mapa, nodo_inicio, nodo_final):
+    # Inicializamos las distancias y el historial de predecesores
+    distancias = {lugar: float('inf') for lugar in mapa.nodes()}
+    distancias[nodo_inicio] = 0
+    historial_predecesores = {lugar: None for lugar in mapa.nodes()}
+
+    nodos_sin_visitar = list(mapa.nodes())
+
+    while nodos_sin_visitar:
+        # Busca el nodo sin visitar con menor distancia acumulada
+        nodo_actual = min(nodos_sin_visitar, key=lambda lugar: distancias[lugar])
+        if nodo_actual == nodo_final:
             break
-            
-        lista_nodos_no_visitados.remove(nodo_actual)
-        
-        # Explorar vecinos
-        for vecino in grafo.neighbors(nodo_actual):
-            if vecino not in lista_nodos_no_visitados:
+        nodos_sin_visitar.remove(nodo_actual)
+
+        for vecino in mapa.neighbors(nodo_actual):
+            if vecino not in nodos_sin_visitar:
                 continue
-                
-            # Obtener el peso de la arista
-            edge_data = grafo.get_edge_data(nodo_actual, vecino)
-            if not edge_data:
+            info_tramo = mapa.get_edge_data(nodo_actual, vecino)
+            if not info_tramo:
                 continue
-                
-            # Tomar el primer edge (puede haber múltiples entre los mismos nodos)
-            first_key = list(edge_data.keys())[0]
-            costo = edge_data[first_key].get('pesos_tiempo_viaje', float('inf'))
-            
-            # Calcular nueva distancia
-            distancia_nueva = distancia[nodo_actual] + costo
-            
-            # Actualizar si encontramos un camino más corto
-            if distancia_nueva < distancia[vecino]:
-                distancia[vecino] = distancia_nueva
-                lista_predecedores[vecino] = nodo_actual
-    
-    # Reconstruir la ruta
-    ruta = []
-    nodo_actual = destino
-    
+            clave_tramo = list(info_tramo.keys())[0]
+            tiempo_cruce = info_tramo[clave_tramo].get('tiempo_viaje', float('inf'))
+
+            nueva_distancia = distancias[nodo_actual] + tiempo_cruce
+
+            if nueva_distancia < distancias[vecino]:
+                distancias[vecino] = nueva_distancia
+                historial_predecesores[vecino] = nodo_actual
+
+    # Reconstruye la ruta desde el nodo final al inicio
+    ruta_optima = []
+    nodo_actual = nodo_final
     while nodo_actual is not None:
-        ruta.insert(0, nodo_actual)
-        nodo_actual = lista_predecedores[nodo_actual]
-        
-        # Si no hay camino, retornar None
-        if nodo_actual == inicial and inicial not in ruta:
-            ruta.insert(0, nodo_actual)
+        ruta_optima.insert(0, nodo_actual)
+        nodo_actual = historial_predecesores[nodo_actual]
+        if nodo_actual == nodo_inicio and nodo_inicio not in ruta_optima:
+            ruta_optima.insert(0, nodo_actual)
             break
-    
-    # Verificar que la ruta es válida
-    if not ruta or ruta[0] != inicial:
+
+    # Valida si la ruta es válida
+    if not ruta_optima or ruta_optima[0] != nodo_inicio:
         return None
-        
-    return ruta
 
+    return ruta_optima
+
+# Obtiene los detalles (distancia, tiempo, nombre de calle) de cada segmento de la ruta
+def detalles_por_segmento(mapa, ruta):
+    lista_segmentos = []
+    metros_totales = 0
+    segundos_totales = 0
+    for i in range(len(ruta) - 1):
+        origen = ruta[i]
+        destino = ruta[i + 1]
+        datos_tramo = mapa.get_edge_data(origen, destino)
+
+        if datos_tramo:
+            clave_tramo = list(datos_tramo.keys())[0]
+            datos = datos_tramo[clave_tramo]
+            metros = datos.get('length', 0)
+            segundos = datos.get('tiempo_viaje', 0)
+            metros_totales += metros
+            segundos_totales += segundos
+            nombre_via = datos.get('name', 'Sin nombre')
+            
+            # CORRECCIÓN: Usar los mismos nombres que espera el frontend
+            segmento = {
+                'segmento': i + 1,  # Cambiado de 'numero_segmento' a 'segmento'
+                'calle': nombre_via if nombre_via else 'Sin nombre',  # Cambiado de 'nombre_calle' a 'calle'
+                'distancia_metros': round(metros, 2),
+                'tiempo_minutos': round(segundos / 60, 2)  # Cambiado de 'tiempo_segundos' a usar directamente minutos
+            }
+            lista_segmentos.append(segmento)    
+
+    return lista_segmentos, metros_totales, segundos_totales
+
+# Define el endpoint para calcular la ruta basándose en la ubicación del usuario
 @app.route('/ruta', methods=['POST'])
-def calcular_ruta():
+def procesar_calculo_ruta():
     try:
-        data_user = request.get_json()
-        # Con la data recibida del usuario, extraemos las coordenadas
-        coords_origen = (data_user['origen']['lat'], data_user['origen']['lng'])
-        coords_destino = (data_user['destino']['lat'], data_user['destino']['lng'])
-        print(f"Coordenadas recibidas - Origen: {coords_origen}, Destino: {coords_destino}")
-        
-        # Cargar red vial de Oaxaca
-        punto_inicial = (17.026351452600192, -96.73258533277694)
-        # Tomamos un punto medio entre las localidades para mejorar la carga del grafo
-        parques_oax = ox.features.features_from_point(punto_inicial, tags={'leisure': 'park'}, dist=15000)
-        # Añadimos los parques al mapa para darle una mejor perspectiva visual y de ubicación
-        parques_oax_gdf = gpd.GeoDataFrame(parques_oax)
-        # Bajamos el grafo de la red vial
-        G = ox.graph_from_point(punto_inicial, dist=15000, network_type='drive')
-        # Añadimos velocidades a las aristas
-        G = ox.routing.add_edge_speeds(G)
+        info_usuario = request.get_json()
+        ubicacion_origen = (info_usuario['origen']['lat'], info_usuario['origen']['lng'])
+        ubicacion_destino = (info_usuario['destino']['lat'], info_usuario['destino']['lng'])
+        print(f"Origen: {ubicacion_origen}, Destino: {ubicacion_destino}")
 
-        # Asignar peso personalizado
-        for u, v, k, d in G.edges(keys=True, data=True):
-            distancia = d.get('length', 1)
+        # Carga la red vial de Oaxaca y agrega los parques al mapa
+        centro_mapa = (17.026351452600192, -96.73258533277694)
+        parques = osmnx.features.features_from_point(centro_mapa, tags={'leisure': 'park'}, dist=15000)
+        parques_gdf = geopandas.GeoDataFrame(parques)
+        red_vial = osmnx.graph_from_point(centro_mapa, dist=15000, network_type='drive')
+        red_vial = osmnx.routing.add_edge_speeds(red_vial)
 
-            # Obtener el valor de maxspeed (puede ser texto o lista)
-            maxspeed = d.get('maxspeed', None)
-            if isinstance(maxspeed, list):
-                maxspeed = maxspeed[0]  # tomar el primer valor si es lista
+        # Asigna el peso personalizado (tiempo de viaje estimado) a cada tramo de la red vial
+        for inicio, final, clave, datos in red_vial.edges(keys=True, data=True):
+            metros = datos.get('length', 1)
+            limite_velocidad = datos.get('maxspeed', None)
+            if isinstance(limite_velocidad, list):
+                limite_velocidad = limite_velocidad[0]
             try:
-                velocidad_kph = float(maxspeed)
+                velocidad_kmh = float(limite_velocidad)
             except (TypeError, ValueError):
-                velocidad_kph = 20  # valor por defecto si no hay dato válido
-                
-            velocidad_ms = max(velocidad_kph / 3.6, 1)
-            d['pesos_tiempo_viaje'] = distancia / velocidad_ms
+                velocidad_kmh = 20
+            velocidad_ms = max(velocidad_kmh / 3.6, 1)
+            datos['tiempo_viaje'] = metros / velocidad_ms
 
-        # Buscar nodos más cercanos
-        # Asignamos las coordenadas recibidas a variables individuales (latitud y longitud)
-        coords_origen_lat, coords_origen_lon = coords_origen
-        coords_destino_lat, coords_destino_lon = coords_destino
+        # Buscar los nodos más cercanos a las ubicaciones dadas por el usuario
+        lat_origen, lon_origen = ubicacion_origen
+        lat_destino, lon_destino = ubicacion_destino
         try:
-            coords_origen_nodo = ox.distance.nearest_nodes(G, X=coords_origen_lon, Y=coords_origen_lat)
-            coords_destino_nodo = ox.distance.nearest_nodes(G, X=coords_destino_lon, Y=coords_destino_lat)
+            nodo_inicio = osmnx.distance.nearest_nodes(red_vial, X=lon_origen, Y=lat_origen)
+            nodo_final = osmnx.distance.nearest_nodes(red_vial, X=lon_destino, Y=lat_destino)
         except Exception:
             return jsonify({
-                # Agregamos un mensaje si las coordenadas están fuera del área de cobertura
                 'error': 'Coordenadas fuera del área de cobertura del mapa. Por favor selecciona puntos cercanos a Oaxaca.'
             }), 400
 
-        # Calcular ruta usando Dijkstra personalizado
         try:
-            ruta = dijkstra_personalizado(G, coords_origen_nodo, coords_destino_nodo)
-            if ruta is None:
+            ruta_final = encontrar_ruta_optima(red_vial, nodo_inicio, nodo_final)
+            if ruta_final is None:
                 raise ValueError("No se encontró una ruta válida")
-        except Exception as e:
-            print(f"Error en Dijkstra personalizado: {e}")
+            print(f"Ruta calculada con {len(ruta_final)} nodos")
+        except Exception as err:
+            print(f"Error ruta óptima: {err}")
             return jsonify({
                 'error': 'No se encontró una ruta entre los puntos seleccionados. Revisa si hay calles conectadas entre ambos lugares.'
             }), 404
 
-        # Calcular distancia y tiempo total
-        distancia_total = 0
-        tiempo_total = 0
-        
-        for i in range(len(ruta) - 1):
-            u = ruta[i]
-            v = ruta[i + 1]
-            edge_data = G.get_edge_data(u, v)
-            if edge_data:
-                first_key = list(edge_data.keys())[0]
-                distancia_total += edge_data[first_key].get('length', 0)
-                tiempo_total += edge_data[first_key].get('pesos_tiempo_viaje', 0)
+        # Obtiene los detalles descriptivos de cada segmento de la ruta
+        segmentos, metros_totales, segundos_totales = detalles_por_segmento(red_vial, ruta_final)
 
-        # Crear un resumen de la ruta usando un diccionario
-        resumen = {
-            "distancia_total_m": round(distancia_total, 2),
-            "tiempo_total_min": round(tiempo_total / 60, 2)
+        resumen_ruta = {
+            "distancia_total_m": round(metros_totales, 2),
+            "tiempo_total_min": round(segundos_totales / 60, 2),
+            "tiempo_total_seg": round(segundos_totales, 2),
+            "segmentos_totales": len(ruta_final) - 1
         }
 
-        # Generar mapa reducido para mejor visualización
-        fig, ax = ox.plot_graph_route(
-            G, ruta,
+        # Genera el mapa y lo convierte a imagen base64
+        fig, ax = osmnx.plot_graph_route(
+            red_vial, ruta_final,
             node_size=0,
             bgcolor='white',
             edge_color='lightgray',
             route_color='red',
             route_linewidth=3,
-            figsize=(6, 6),
+            figsize=(10, 8),
             show=False,
             close=False
         )
-        # Agregar color de los parques al mapa
-        parques_oax_gdf.plot(ax=ax, color='green', alpha=0.5)
-
-        x = [G.nodes[n]['x'] for n in ruta]
-        y = [G.nodes[n]['y'] for n in ruta]
+        parques_gdf.plot(ax=ax, color='green', alpha=0.3)
+        x = [red_vial.nodes[n]['x'] for n in ruta_final]
+        y = [red_vial.nodes[n]['y'] for n in ruta_final]
         margen = 0.001
         ax.set_xlim(min(x) - margen, max(x) + margen)
         ax.set_ylim(min(y) - margen, max(y) + margen)
         ax.axis('off')
         ax.set_aspect('equal', 'box')
-
-        # Convertir figura a Base64 para que se pueda enviar en JSON
         buf = io.BytesIO()
-        plt.tight_layout(pad=0.5)
-        plt.savefig(buf, format='png', dpi=200, bbox_inches=None)
+        plt.tight_layout(pad=1.0)
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         plt.close(fig)
 
+        # DEBUG: Imprimir la estructura de datos que se envía
+        print("Estructura de segmentos enviada:")
+        for i, segmento in enumerate(segmentos):
+            print(f"Segmento {i+1}: {segmento}")
+
         return jsonify({
-            'mensaje': 'Ruta calculada correctamente con Dijkstra personalizado',
-            'resumen': resumen,
+            'mensaje': 'Ruta calculada correctamente',
+            'resumen': resumen_ruta,
+            'segmentos': segmentos,
             'mapa': f"data:image/png;base64,{img_base64}"
         })
 
-    except Exception as e:
-        print("Error general:", str(e))
+    except Exception as err:
+        print("Error general:", str(err))
         return jsonify({
             'error': 'Ocurrió un error inesperado al calcular la ruta. Intenta nuevamente.',
-            'detalle': str(e)
+            'detalle': str(err)
         }), 500
-
 
 if __name__ == '__main__':
     app.run(debug=True)
